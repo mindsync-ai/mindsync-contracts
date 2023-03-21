@@ -53,25 +53,8 @@ interface IMindsyncEscrow {
 }
 
 contract CustomerContract {
-    address private _owner;
-
-    /**
-     * @dev Throws if called by any account other than the owner.
-     */
-    modifier onlyOwner() {
-        require (_owner == msg.sender);
-        _;
-    }
-
-    /**
-     * @dev Transfers ownership of the contract to a new account (`newOwner`).
-     * Can only be called by the current owner.
-     */
-    function transferOwnership(address newOwner) public onlyOwner {
-        _owner = newOwner;
-    }
-
     event Deposit(address source, uint256 amount, uint256 tokens);
+    event DepositFailed(address source, uint256 amount);
 
     // PancakeSwap v2 router address
     // address private PANCAKESWAP_V2_ROUTER = 0x9Ac64Cc6e4415144C455BD8E4837Fea55603e5c3;  // Testnet
@@ -83,23 +66,15 @@ contract CustomerContract {
 
     // Mindsync platform contract address. Set by owner
     // address public platformContract = 0x3cf8cDEe4c28739d6a5Afff4caC7Bf60524c0B66;  // Testnet
-    address public platformContract = 0x14A66FBcADf95883802035312AcADb06969ba474;
+    address constant platformContract = 0x14A66FBcADf95883802035312AcADb06969ba474;
 
     // BSC MAI token address. Set by owner
     // address public mediaContract = 0x3e13482005D3E6Bb5334b7bD6590D7AD5EfBCC66;  // Testnet
     address constant mediaContract = 0xe985e923b6c52b420DD33549A0ebc2CdeB0AE173;
 
-    /**
-     * @dev Set the Mindsync platform contract address.
-     */
-    function setPlatformContract(address platformContractAddress)
-        external
-        onlyOwner
-    {
-        require(
-            platformContractAddress != address(0) // Cannot set Mindsync platform contract as zero address
-        );
-        platformContract = platformContractAddress;
+    modifier onlyOwner() {
+        require (msg.sender == platformContract);
+        _;
     }
 
     /**
@@ -124,15 +99,35 @@ contract CustomerContract {
         require(amount != 0, "0"); // Can not buy tokens for zero BNB
 
         // TODO: protect transaction from front runners
-        IPancakeV2Router(PANCAKESWAP_V2_ROUTER).swapExactETHForTokens{
-            value: amount
-        }(0, path, address(this), deadline);
+        try IPancakeV2Router(PANCAKESWAP_V2_ROUTER).swapExactETHForTokens{
+                value: amount
+            }(0, path, address(this), deadline)
+        {
+            uint256 balance = IERC20(mediaContract).balanceOf(address(this));
+            require(balance != 0, "P"); // Ups! Tokens not received from Pancakeswap
+            IERC20(mediaContract).approve(platformContract, balance);
+            IMindsyncEscrow(platformContract).deposit(balance);
 
+            emit Deposit(msg.sender, amount, balance);
+        }
+        catch {
+            // Emit DepositFailed event to process users deposit using resqueBNB()
+            emit DepositFailed(msg.sender, amount);
+        }
+    }
+
+    // Resque user's BNB if swap failed
+    function resqueEther(address payable _to) public onlyOwner {
+        _to.transfer(address(this).balance);
+    }
+
+    // Migrate user to a new customer contract with tokens transfer
+    function migrate(address newCustomerContract) external onlyOwner {
+        // Transfer MAI to new customer contract
         uint256 balance = IERC20(mediaContract).balanceOf(address(this));
-        require(balance != 0, "P"); // Ups! Tokens not received from Pancakeswap
-        IERC20(mediaContract).approve(platformContract, balance);
-        IMindsyncEscrow(platformContract).deposit(balance);
+        IERC20(mediaContract).transfer(newCustomerContract, balance);
 
-        emit Deposit(msg.sender, amount, balance);
+        // Destruct old contract to make migration cheaper
+        selfdestruct(payable(msg.sender));
     }
 }
