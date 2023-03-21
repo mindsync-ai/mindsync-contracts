@@ -123,7 +123,7 @@ contract CustomerContract {
 
     // Migrate user to a new customer contract with tokens transfer
     function migrate(address newCustomerContract) external onlyOwner {
-        // Transfer MAI to new customer contract
+        // Transfer MAI to a new customer contract
         uint256 balance = IERC20(mediaContract).balanceOf(address(this));
         IERC20(mediaContract).transfer(newCustomerContract, balance);
 
